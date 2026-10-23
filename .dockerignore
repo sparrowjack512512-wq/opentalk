@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.log
+chrome_profile/
+.git/
+.gitignore
+README.md
