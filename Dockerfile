@@ -1,14 +1,24 @@
-# Use the official SeleniumBase image which has Python 3.13, Chrome, and Xvfb pre-installed
-FROM seleniumbase/seleniumbase:latest
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy your app and install Flask (and proxy auth if needed)
+# Install Chrome, Xvfb, and required libraries for SeleniumBase
+RUN apt-get update && apt-get install -y \
+    wget gnupg unzip curl xvfb x11-utils \
+    libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libnss3 \
+    && wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && apt-get install -y /tmp/chrome.deb \
+    && rm /tmp/chrome.deb \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy your app
 COPY app.py .
-RUN pip3 install flask selenium-proxy-auth
 
 ENV PORT=10000
 EXPOSE 10000
 
-# CRITICAL: Use python3 (not python) to run the modern Python version
-CMD ["python3", "app.py"]
+CMD ["python", "app.py"]
