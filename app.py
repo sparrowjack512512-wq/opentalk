@@ -3,6 +3,10 @@ import random
 import time
 import threading
 import logging
+# -*- coding: utf-8 -*-
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from flask import Flask
 from seleniumbase import SB
 from selenium.webdriver.common.by import By
