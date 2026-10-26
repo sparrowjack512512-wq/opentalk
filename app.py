@@ -5,7 +5,6 @@ import threading
 import logging
 import traceback
 from flask import Flask
-from seleniumbase import Driver
 from seleniumbase import SB
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -26,30 +25,12 @@ SEL_SKIP  = "#startBtn"
 SEL_LEAVE = "#stopBtn"
 
 MESSAGE_SETS = [
-    ["Hii", "F 20", "talk to me on Chitmet gg", "Lisaaa9848"],
-    ["hey", "F 20", "chat with me on Chitmet gg", "Lisaaa9848"],
-    ["heyyy", "F 20", "find me on Chitmet gg", "Lisaaa9848"],
-    ["hiii there", "F 20", "let's chat on Chitmet gg", "Lisaaa9848"],
-    ["hellooo", "F 20", "message me on Chitmet gg", "Lisaaa9848"],
-    ["hey you", "F 20", "come talk on Chitmet gg", "Lisaaa9848"],
-    ["hiiiii", "F 20", "join me on Chitmet gg", "Lisaaa9848"],
-    ["heyy", "F 20", "wanna chat on Chitmet gg?", "Lisaaa9848"],
-    ["hello", "F 20", "let's connect on Chitmet gg", "Lisaaa9848"],
-    ["hii dear", "F 20", "I'm on Chitmet gg", "Lisaaa9848"],
-    ["heyyyy", "F 20", "come say hi on Chitmet gg", "Lisaaa9848"],
-    ["hiii :) ", "F 20", "talk with me on Chitmet gg", "Lisaaa9848"],
-    ["hey there", "F 20", "find me over on Chitmet gg", "Lisaaa9848"],
-    ["helloooo", "F 20", "let's talk on Chitmet gg", "Lisaaa9848"],
-    ["hii", "F 20", "send me a message on Chitmet gg", "Lisaaa9848"],
-    ["heyyy :) ", "F 20", "let's have a chat on Chitmet gg", "Lisaaa9848"],
-    ["hiiii", "F 20", "you can reach me on Chitmet gg", "Lisaaa9848"],
-    ["hey what's up", "F 20", "chat with me over on Chitmet gg", "Lisaaa9848"],
-    ["hii cutie", "F 20", "come chat with me on Chitmet gg", "Lisaaa9848"],
-    ["heyy", "F 20", "say hello on Chitmet gg", "Lisaaa9848"]
+    ["Hii", "F", "talk to me on Chitmet gg", "Lisaaa9848"],
+    ["hey", "F", "chat with me on Chitmet gg", "Lisaaa9848"],
 ]
 
 MATCH_TIMEOUT      = 90
-MAX_CYCLES         = 999999999999999
+MAX_CYCLES         = 999999
 POST_START_WAIT    = 3.0
 TYPE_DELAY_MIN     = 0.02
 TYPE_DELAY_MAX     = 0.08
@@ -83,10 +64,9 @@ log = logging.getLogger("opentalk")
 
 running = False
 stop_flag = False
-driver = None
 
 # ============================================================
-# HELPERS (unchanged)
+# HELPERS
 # ============================================================
 def human_type(element, text):
     for char in text:
@@ -238,7 +218,7 @@ def run_cycle(d, messages):
     skip_chat(d)
 
 # ============================================================
-# BOT LOOP (uses Driver, not SB)
+# BOT LOOP
 # ============================================================
 def bot_loop():
     global running, stop_flag
@@ -246,15 +226,28 @@ def bot_loop():
     try:
         sb_kwargs = {"uc": True}
         if IS_SERVER:
-            sb_kwargs["xvfb"] = True
-            sb_kwargs["binary_location"] = "/usr/bin/google-chrome"
-            log.info("Server mode: SB(uc=True, xvfb=True, binary=/usr/bin/google-chrome)")
+            sb_kwargs.update({
+                "xvfb": True,
+                "headed": True,
+                "no_sandbox": True,
+                "binary_location": "/opt/google/chrome/google-chrome",
+            })
+            log.info("Server mode: SB(uc=True, xvfb=True, headed=True, no_sandbox=True, binary=/opt/google/chrome/google-chrome)")
         else:
             sb_kwargs["headless"] = False
             log.info("Local mode: SB(uc=True)")
 
         log.info("🚀 About to enter SB context manager...")
-        with SB(**sb_kwargs) as sb:
+        sb = SB(**sb_kwargs)
+        try:
+            sb.__enter__()
+            log.info("✅ SB entered successfully.")
+        except Exception as e:
+            log.critical(f"❌ SB __enter__ failed: {e}")
+            log.critical(traceback.format_exc())
+            return
+
+        try:
             d = sb.driver
             log.info("✅ SB driver created successfully.")
             handle_entry(d)
@@ -301,6 +294,12 @@ def bot_loop():
                 log.info(f"💤 Cycle pause: {pause:.1f}s")
                 time.sleep(pause)
 
+        finally:
+            try:
+                sb.__exit__(None, None, None)
+            except Exception:
+                pass
+
     except KeyboardInterrupt:
         log.info("🛑 Interrupted.")
     except Exception as e:
@@ -319,9 +318,6 @@ app = Flask(__name__)
 def health():
     return f"opentalk bot: running={running}", 200
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
 if __name__ == "__main__":
     threading.Thread(target=bot_loop, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
