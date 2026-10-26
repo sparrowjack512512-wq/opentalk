@@ -34,8 +34,8 @@ MSG_GAP = 3.5
 POST_SEND_WAIT_MIN = 20.0
 POST_SEND_WAIT_MAX = 25.0
 
-# Script to force closed shadow roots to open
-# This MUST run before the page's own scripts create the Turnstile widget
+# This script MUST run before any page JS creates the shadow root.
+# It forces closed shadow roots to be open so the sitekey becomes readable.
 SHADOW_ROOT_SCRIPT = """
 const originalAttachShadow = Element.prototype.attachShadow;
 Element.prototype.attachShadow = function(...args) {
@@ -63,8 +63,7 @@ def create_driver():
     options.binary_location = "/usr/bin/google-chrome"
     driver = webdriver.Chrome(options=options)
     
-    # CRITICAL: Inject the shadow-root opener BEFORE any page loads
-    # This makes the Turnstile sitekey readable by selenium-turnstile
+    # CRITICAL: inject BEFORE any page loads
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": SHADOW_ROOT_SCRIPT}
@@ -180,8 +179,6 @@ def bot_loop():
             time.sleep(2)
         except Exception as e:
             log.warning(f"Peak solve failed: {e}")
-            # If solve fails, we can still try to click buttons manually
-            # but the CAPTCHA will block us. Log and continue.
 
         # ---- Entry ----
         log.info("Clicking entry buttons...")
@@ -208,7 +205,6 @@ def bot_loop():
                 log.warning("Match timeout. Reloading...")
                 driver.refresh()
                 time.sleep(3)
-                # CAPTCHA may reappear after refresh, try solving again
                 try:
                     solve_turnstile(driver)
                     log.info("Re-solved CAPTCHA after reload.")
@@ -232,9 +228,6 @@ def bot_loop():
         running = False
         log.info("Bot finished.")
 
-# ============================================================
-# FLASK (Health Check)
-# ============================================================
 app = Flask(__name__)
 
 @app.route("/")
