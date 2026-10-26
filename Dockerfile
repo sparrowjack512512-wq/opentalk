@@ -1,34 +1,11 @@
-FROM python:3.11-slim
+FROM seleniumbase/seleniumbase:latest
 
 WORKDIR /app
 
-# Install Chrome and Xvfb dependencies
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    unzip \
-    curl \
-    xvfb \
-    x11-utils \
-    libxss1 \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libgtk-3-0 \
-    libnss3 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Google Chrome
-RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && apt-get update \
-    && apt-get install -y /tmp/chrome.deb \
-    && rm /tmp/chrome.deb \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
+# The official image already has Chrome, Xvfb, and all dependencies.
+# Just copy your app and install Flask.
 COPY app.py .
+RUN pip install flask
 
 ENV PORT=10000
 EXPOSE 10000
