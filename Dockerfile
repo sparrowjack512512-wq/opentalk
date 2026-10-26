@@ -2,7 +2,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Chrome, Xvfb, and required libraries for SeleniumBase
 RUN apt-get update && apt-get install -y \
     wget gnupg unzip curl xvfb x11-utils \
     libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libnss3 \
@@ -11,12 +10,12 @@ RUN apt-get update && apt-get install -y \
     && rm /tmp/chrome.deb \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy your app
 COPY app.py .
+
+RUN which google-chrome || which google-chrome-stable || echo "CHROME NOT FOUND"
 
 ENV PORT=10000
 EXPOSE 10000
