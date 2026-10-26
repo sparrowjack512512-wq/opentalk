@@ -1,375 +1,245 @@
-
-import logging
 import os
-import signal
-import sys
-import threading
 import time
+import random
+import threading
+import logging
 import traceback
+from flask import Flask
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+from selenium_turnstile import solve_turnstile
 
-from flask import Flask, jsonify
-from seleniumbase import Driver
+# ============================================================
+# CONFIG
+# ============================================================
+URL = "https://opentalk.club/text/"
+SEL_GIRL  = "button.ot-onb-action:not(.is-primary)"
+SEL_START = "button.ot-onb-action.is-primary"
+SEL_INPUT = "#chatInput"
+SEL_SEND  = "#chatSend"
+SEL_SKIP  = "#startBtn"
 
-# =========================================================
-# CONFIGURATION
-# =========================================================
+MESSAGE_SETS = [
+    ["Hii", "F", "talk to me on Chitmet gg", "Lisaaa9848"],
+    ["hey", "F", "chat with me on Chitmet gg", "Lisaaa9848"],
+]
 
-TEST_URL = "https://example.com/"
-CYCLE_INTERVAL_SECONDS = 10
-RESTART_AFTER_CYCLES = 30
-PAGE_LOAD_TIMEOUT_SECONDS = 20
-ERROR_RETRY_SECONDS = 5
-HEARTBEAT_INTERVAL_SECONDS = 15
+MATCH_TIMEOUT = 90
+POST_START_WAIT = 3.0
+MSG_GAP = 3.5
+POST_SEND_WAIT_MIN = 20.0
+POST_SEND_WAIT_MAX = 25.0
 
-FLASK_PORT = int(os.environ.get("PORT", "10000"))
-
-# =========================================================
+# ============================================================
 # LOGGING
-# =========================================================
+# ============================================================
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("opentalk")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-    force=True,
-)
+running = False
+stop_flag = False
 
-log = logging.getLogger("render-browser-worker")
+# ============================================================
+# DRIVER
+# ============================================================
+def create_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    # Important: Use the system Chrome binary
+    options.binary_location = "/usr/bin/google-chrome"
+    return webdriver.Chrome(options=options)
 
-# =========================================================
-# SHARED STATE
-# =========================================================
+# ============================================================
+# HELPERS
+# ============================================================
+def human_type(element, text):
+    for char in text:
+        element.send_keys(char)
+        time.sleep(random.uniform(0.02, 0.08))
 
-app = Flask(__name__)
-stop_event = threading.Event()
-state_lock = threading.Lock()
+def wait_for(d, selector, timeout, condition="presence"):
+    w = WebDriverWait(d, timeout)
+    if condition == "clickable":
+        return w.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+    return w.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
 
-state = {
-    "running": False,
-    "browser_ready": False,
-    "cycle": 0,
-    "browser_restarts": 0,
-    "last_error": None,
-    "last_success": None,
-    "last_activity": None,
-    "worker_phase": "starting",
-}
-
-
-def update_state(**kwargs):
-    with state_lock:
-        state.update(kwargs)
-
-
-def get_state():
-    with state_lock:
-        return dict(state)
-
-
-def log_activity(message, phase=None):
-    timestamp = time.strftime(
-        "%Y-%m-%d %H:%M:%S UTC",
-        time.gmtime(),
-    )
-
-    changes = {"last_activity": timestamp}
-    if phase is not None:
-        changes["worker_phase"] = phase
-
-    update_state(**changes)
-    log.info("%s", message)
-
-
-# =========================================================
-# SHUTDOWN
-# =========================================================
-
-def handle_shutdown(signum, frame):
-    log.warning("SHUTDOWN: Signal received: %s", signum)
-    stop_event.set()
-
-
-# =========================================================
-# BROWSER
-# =========================================================
-
-def create_browser():
-    log_activity("BROWSER: Starting Chrome", "starting_browser")
-
-    browser = Driver(
-        browser="chrome",
-        headless=True,
-        binary_location="/usr/bin/google-chrome",
-    )
-
-    browser.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
-    browser.set_script_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
-
-    update_state(browser_ready=True)
-    log_activity("BROWSER: Chrome started successfully", "ready")
-
-    return browser
-
-
-def close_browser(browser):
-    if browser is None:
-        return
-
+def try_click(d, selector, label, timeout=2):
     try:
-        log_activity("BROWSER: Closing Chrome", "closing_browser")
-        browser.quit()
-        log_activity("BROWSER: Chrome closed", "browser_closed")
+        el = wait_for(d, selector, timeout=timeout, condition="clickable")
+        el.click()
+        log.info(f"Clicked: {label}")
+        return True
+    except Exception as e:
+        log.warning(f"Could not click '{label}': {type(e).__name__}")
+        return False
+
+def js_click(d, selector, label, timeout=5):
+    try:
+        el = WebDriverWait(d, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+        d.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", el)
+        log.info(f"Clicked (JS): {label}")
+        return True
+    except Exception as e:
+        log.warning(f"Could not JS-click '{label}': {type(e).__name__}")
+        return False
+
+def is_matched(d):
+    try:
+        inp = d.find_element(By.CSS_SELECTOR, SEL_INPUT)
+        return inp.is_displayed() and inp.is_enabled()
     except Exception:
-        log.exception("BROWSER: Error while closing Chrome")
+        return False
 
-
-# =========================================================
-# ONE TEST CYCLE
-# =========================================================
-
-def run_test_cycle(browser, cycle_number):
-    log_activity(
-        f"CYCLE {cycle_number}: Beginning navigation to {TEST_URL}",
-        "navigating",
-    )
-
-    browser.get(TEST_URL)
-
-    log_activity(
-        f"CYCLE {cycle_number}: Navigation completed",
-        "reading_page",
-    )
-
-    title = browser.title
-    url = browser.current_url
-
-    if not title:
-        raise RuntimeError("Test page returned an empty title")
-
-    timestamp = time.strftime(
-        "%Y-%m-%d %H:%M:%S UTC",
-        time.gmtime(),
-    )
-
-    update_state(
-        cycle=cycle_number,
-        last_success=timestamp,
-        last_error=None,
-    )
-
-    log_activity(
-        f"CYCLE {cycle_number} PASSED | "
-        f"title={title!r} | url={url}",
-        "cycle_passed",
-    )
-
-
-# =========================================================
-# INDEPENDENT HEARTBEAT
-# =========================================================
-
-def heartbeat_monitor():
-    log.info("WATCHDOG: Heartbeat monitor started")
-
-    while not stop_event.wait(HEARTBEAT_INTERVAL_SECONDS):
-        current = get_state()
-
-        log.info(
-            "WATCHDOG: Process alive | "
-            "worker_running=%s | browser_ready=%s | "
-            "last_completed_cycle=%s | phase=%s | "
-            "last_activity=%s | browser_restarts=%s | "
-            "last_error=%s",
-            current["running"],
-            current["browser_ready"],
-            current["cycle"],
-            current["worker_phase"],
-            current["last_activity"],
-            current["browser_restarts"],
-            current["last_error"],
-        )
-
-
-# =========================================================
-# BACKGROUND WORKER
-# =========================================================
-
-def worker():
-    browser = None
-    cycles_since_restart = 0
-
-    update_state(
-        running=True,
-        browser_ready=False,
-        last_error=None,
-        worker_phase="starting",
-    )
-
-    log_activity("WORKER: Background worker started", "starting")
-
+def skip_chat(d):
     try:
-        while not stop_event.is_set():
+        log.info("Skipping chat...")
+        btn = wait_for(d, SEL_SKIP, timeout=10, condition="clickable")
+        btn.click()
+        log.info("Skip click 1")
+        time.sleep(0.6)
+        try:
+            btn2 = wait_for(d, SEL_SKIP, timeout=5, condition="clickable")
+            btn2.click()
+            log.info("Skip click 2 (confirmed)")
+            time.sleep(1.0)
+        except Exception:
+            pass
+        log.info("Left chat.")
+    except Exception as e:
+        log.error(f"Skip failed: {type(e).__name__}: {e}")
+
+def send_message(d, input_box, text):
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if input_box.is_displayed() and input_box.is_enabled():
+            break
+        time.sleep(0.2)
+    input_box.clear()
+    human_type(input_box, text)
+    time.sleep(random.uniform(0.3, 0.8))
+    if not try_click(d, SEL_SEND, "send", timeout=3):
+        input_box.send_keys(Keys.ENTER)
+
+# ============================================================
+# BOT LOGIC
+# ============================================================
+def run_cycle(d, messages):
+    log.info(f"Waiting {POST_START_WAIT}s...")
+    time.sleep(POST_START_WAIT)
+    if not is_matched(d):
+        log.info(f"Polling for match (up to {MATCH_TIMEOUT}s)...")
+        deadline = time.time() + MATCH_TIMEOUT
+        while time.time() < deadline:
+            if is_matched(d):
+                break
+            time.sleep(0.4)
+        else:
+            raise TimeoutException("Match timeout")
+    log.info("Matched!")
+    input_box = d.find_element(By.CSS_SELECTOR, SEL_INPUT)
+    log.info(f"Sending: {messages}")
+    for i, msg in enumerate(messages):
+        send_message(d, input_box, msg)
+        log.info(f"Sent {i+1}: {msg}")
+        if i < len(messages) - 1:
+            time.sleep(MSG_GAP)
+    time.sleep(random.uniform(POST_SEND_WAIT_MIN, POST_SEND_WAIT_MAX))
+    skip_chat(d)
+
+def bot_loop():
+    global running, stop_flag
+    running = True
+    driver = None
+    try:
+        log.info("Starting bot...")
+        driver = create_driver()
+        driver.get(URL)
+        time.sleep(5)
+
+        # ---- Solve CAPTCHA via Peak ----
+        try:
+            log.info("Solving Turnstile via Peak...")
+            # Reads sitekey from page, asks Peak for token, injects it.
+            token = solve_turnstile(driver)
+            log.info(f"Token injected (length={len(token)}).")
+            time.sleep(2)
+        except Exception as e:
+            log.warning(f"Peak solve failed: {e}")
+
+        # ---- Entry ----
+        log.info("Clicking entry buttons...")
+        if not try_click(driver, SEL_GIRL, "'I'm a girl'"):
+            js_click(driver, SEL_GIRL, "'I'm a girl'")
+        time.sleep(1)
+        if not try_click(driver, SEL_START, "Start chatting"):
+            js_click(driver, SEL_START, "Start chatting")
+        time.sleep(2)
+        log.info("Entry complete.")
+
+        # ---- Main Loop ----
+        for cycle in range(1, 999999):
+            if stop_flag:
+                break
+            log.info(f"\n{'='*20} CYCLE {cycle} {'='*20}")
+
+            if not is_matched(driver):
+                log.info("Clicking 'Start chatting'...")
+                if not try_click(driver, SEL_START, "Start chatting", timeout=3):
+                    js_click(driver, SEL_START, "Start chatting", timeout=3)
+
             try:
-                if browser is None:
-                    browser = create_browser()
+                run_cycle(driver, random.choice(MESSAGE_SETS))
+            except TimeoutException:
+                log.warning("Match timeout. Reloading...")
+                driver.refresh()
+                time.sleep(3)
+                # CAPTCHA may reappear after refresh, try solving again
+                try:
+                    solve_turnstile(driver)
+                    log.info("Re-solved CAPTCHA after reload.")
+                except Exception as e:
+                    log.warning(f"Re-solve failed: {e}")
+            except Exception as e:
+                log.error(f"Cycle error: {e}")
+                time.sleep(2)
 
-                cycle_number = cycles_since_restart + 1
-                run_test_cycle(browser, cycle_number)
-                cycles_since_restart += 1
+            time.sleep(random.uniform(3.0, 9.0))
 
-                # Periodically test whether Chrome can restart cleanly.
-                if cycles_since_restart >= RESTART_AFTER_CYCLES:
-                    log_activity(
-                        f"BROWSER: Restarting after "
-                        f"{cycles_since_restart} successful cycles",
-                        "restarting_browser",
-                    )
-
-                    update_state(browser_ready=False)
-                    close_browser(browser)
-                    browser = None
-                    cycles_since_restart = 0
-
-                    if stop_event.is_set():
-                        break
-
-                    browser = create_browser()
-
-                    with state_lock:
-                        state["browser_restarts"] += 1
-
-                    log_activity(
-                        "BROWSER: Restart completed",
-                        "ready",
-                    )
-
-                log_activity(
-                    f"WAIT: Beginning "
-                    f"{CYCLE_INTERVAL_SECONDS}-second delay",
-                    "waiting",
-                )
-
-                interrupted = stop_event.wait(
-                    CYCLE_INTERVAL_SECONDS
-                )
-
-                if interrupted:
-                    log_activity(
-                        "WAIT: Interrupted by shutdown",
-                        "stopping",
-                    )
-                    break
-
-                log_activity(
-                    "WAIT: Delay finished; starting next cycle",
-                    "starting_next_cycle",
-                )
-
-            except Exception as exc:
-                error_text = f"{type(exc).__name__}: {exc}"
-
-                log.error("WORKER: Cycle failed: %s", error_text)
-                log.debug("%s", traceback.format_exc())
-
-                update_state(
-                    browser_ready=False,
-                    last_error=error_text,
-                    worker_phase="error_recovery",
-                )
-
-                close_browser(browser)
-                browser = None
-                cycles_since_restart = 0
-
-                if stop_event.wait(ERROR_RETRY_SECONDS):
-                    break
-
+    except Exception as e:
+        log.critical(f"Fatal: {e}")
+        log.critical(traceback.format_exc())
     finally:
-        update_state(
-            browser_ready=False,
-            worker_phase="stopping",
-        )
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        running = False
+        log.info("Bot finished.")
 
-        close_browser(browser)
-
-        update_state(
-            running=False,
-            worker_phase="stopped",
-        )
-
-        log_activity("WORKER: Background worker stopped", "stopped")
-
-
-# =========================================================
-# HEALTH ENDPOINTS
-# =========================================================
+# ============================================================
+# FLASK (Health Check)
+# ============================================================
+app = Flask(__name__)
 
 @app.route("/")
 def health():
-    current = get_state()
-    code = 200 if current["running"] else 503
+    return f"opentalk bot: running={running}", 200
 
-    return jsonify({
-        "service": "Render Browser Test",
-        **current,
-    }), code
-
-
-@app.route("/health")
-def health_check():
-    current = get_state()
-
-    healthy = (
-        current["running"]
-        and current["browser_ready"]
-        and current["last_error"] is None
-    )
-
-    return jsonify({
-        "healthy": healthy,
-        **current,
-    }), 200 if healthy else 503
-
-
-# =========================================================
+# ============================================================
 # ENTRY POINT
-# =========================================================
-
+# ============================================================
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    signal.signal(signal.SIGINT, handle_shutdown)
-
-    log.info("CONTAINER APPLICATION STARTING")
-
-    worker_thread = threading.Thread(
-        target=worker,
-        name="browser-worker",
-        daemon=True,
-    )
-
-    heartbeat_thread = threading.Thread(
-        target=heartbeat_monitor,
-        name="heartbeat-monitor",
-        daemon=True,
-    )
-
-    worker_thread.start()
-    heartbeat_thread.start()
-
-    log.info("Starting Flask health server on port %s", FLASK_PORT)
-
-    try:
-        app.run(
-            host="0.0.0.0",
-            port=FLASK_PORT,
-            use_reloader=False,
-            threaded=True,
-        )
-    finally:
-        log.info("APPLICATION: Shutdown started")
-        stop_event.set()
-
-        worker_thread.join(timeout=10)
-        heartbeat_thread.join(timeout=3)
-
-        log.info("APPLICATION: Shutdown complete")
+    threading.Thread(target=bot_loop, daemon=True).start()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
