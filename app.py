@@ -3,6 +3,7 @@ import random
 import time
 import threading
 import logging
+import traceback
 from flask import Flask
 from seleniumbase import SB
 from selenium.webdriver.common.by import By
@@ -65,10 +66,7 @@ CYCLE_PAUSE_MAX    = 9.0
 CAPTCHA_WAIT_TIMEOUT = 40.0
 RECONNECT_TIME = 5
 
-# Proxy (set via environment variable on Render)
 PROXY_URL = os.environ.get("PROXY_URL", "")
-
-# Detect if running on Render (Linux server) vs local Windows
 IS_SERVER = os.name != "nt"
 
 # ============================================================
@@ -82,14 +80,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("opentalk")
 
-# ============================================================
-# GLOBAL STATE
-# ============================================================
 running = False
 stop_flag = False
 
 # ============================================================
-# HELPER FUNCTIONS
+# HELPERS
 # ============================================================
 def human_type(element, text):
     for char in text:
@@ -244,35 +239,26 @@ def bot_loop():
     global running, stop_flag
     running = True
     try:
-        # Build kwargs for SB()
-        # On server: xvfb=True creates a virtual display for PyAutoGUI (CAPTCHA clicking)
-        # On local: just use the normal visible window
-        sb_kwargs = {"uc": True}
+        # Build SB kwargs; on server, xvfb + explicit Chrome path
+        sb_kwargs = {"uc": True, "binary_location": "/usr/bin/google-chrome"}
         if IS_SERVER:
             sb_kwargs["xvfb"] = True
-            log.info("Server mode: using Xvfb virtual display.")
+            log.info("Server mode: using Xvfb virtual display + /usr/bin/google-chrome")
         else:
             sb_kwargs["window_size"] = "1920,1080"
+            # On Windows, don't set binary_location
+            sb_kwargs.pop("binary_location", None)
             log.info("Local mode: visible browser window.")
 
-        # If a proxy is configured, apply it via selenium-proxy-auth
         if PROXY_URL:
-            log.info(f"Proxy configured: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else 'yes'}")
-            from selenium_proxy_auth import add_proxy
-            from selenium.webdriver.chrome.options import Options
-            # We need to pass ChromeOptions with the proxy extension to SB
-            # SB() accepts a 'proxy' argument for simple proxies, but for user:pass
-            # we build the extension and pass it via chrome_options.
-            # However, SB() doesn't accept chrome_options directly. 
-            # The cleanest way is to use the 'proxy' string if SB supports it,
-            # or rely on the environment. Given the complexity, we'll log a warning.
-            log.warning("Authenticated proxy requires manual ChromeOptions integration. "
-                        "If the bot fails, check the proxy setup.")
+            log.info(f"Proxy configured (host: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else 'yes'})")
         else:
             log.info("No PROXY_URL set. Running without proxy.")
 
+        log.info("🚀 Entering SB context manager...")
         with SB(**sb_kwargs) as sb:
             d = sb.driver
+            log.info("✅ SB driver created.")
             handle_entry(d)
 
             for cycle in range(1, MAX_CYCLES + 1):
@@ -319,13 +305,14 @@ def bot_loop():
     except KeyboardInterrupt:
         log.info("🛑 Interrupted.")
     except Exception as e:
-        log.critical(f"💥 Fatal: {e}")
+        log.critical(f"💥 Fatal in bot_loop: {e}")
+        log.critical(traceback.format_exc())
     finally:
         running = False
         log.info("🏁 Bot finished.")
 
 # ============================================================
-# FLASK HEALTH CHECK
+# FLASK
 # ============================================================
 app = Flask(__name__)
 
@@ -333,7 +320,17 @@ app = Flask(__name__)
 def health():
     return f"opentalk bot: running={running}", 200
 
+# ============================================================
+# ENTRY POINT with safe wrapper
+# ============================================================
 if __name__ == "__main__":
-    threading.Thread(target=bot_loop, daemon=True).start()
+    def run_bot_safe():
+        try:
+            bot_loop()
+        except Exception:
+            log.critical("Bot loop crashed with traceback:")
+            log.critical(traceback.format_exc())
+
+    threading.Thread(target=run_bot_safe, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
