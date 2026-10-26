@@ -2,7 +2,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Chrome and its dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -13,11 +12,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application
 COPY app.py .
 
 CMD ["python", "app.py"]
