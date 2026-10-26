@@ -17,7 +17,7 @@ from seleniumbase import Driver
 TEST_URL = "https://example.com/"
 CYCLE_INTERVAL_SECONDS = 10
 RESTART_AFTER_CYCLES = 30
-PAGE_LOAD_TIMEOUT_SECONDS = 30
+PAGE_LOAD_TIMEOUT_SECONDS = 20
 ERROR_RETRY_SECONDS = 5
 HEARTBEAT_INTERVAL_SECONDS = 15
 
@@ -37,7 +37,7 @@ logging.basicConfig(
 log = logging.getLogger("render-browser-worker")
 
 # =========================================================
-# APPLICATION STATE
+# SHARED STATE
 # =========================================================
 
 app = Flask(__name__)
@@ -52,6 +52,7 @@ state = {
     "last_error": None,
     "last_success": None,
     "last_activity": None,
+    "worker_phase": "starting",
 }
 
 
@@ -65,31 +66,35 @@ def get_state():
         return dict(state)
 
 
-def log_activity(message):
+def log_activity(message, phase=None):
     timestamp = time.strftime(
         "%Y-%m-%d %H:%M:%S UTC",
         time.gmtime(),
     )
 
-    update_state(last_activity=timestamp)
+    changes = {"last_activity": timestamp}
+    if phase is not None:
+        changes["worker_phase"] = phase
+
+    update_state(**changes)
     log.info("%s", message)
 
 
 # =========================================================
-# SHUTDOWN HANDLING
+# SHUTDOWN
 # =========================================================
 
 def handle_shutdown(signum, frame):
-    log.warning("SHUTDOWN: Received signal %s", signum)
+    log.warning("SHUTDOWN: Signal received: %s", signum)
     stop_event.set()
 
 
 # =========================================================
-# BROWSER MANAGEMENT
+# BROWSER
 # =========================================================
 
 def create_browser():
-    log_activity("BROWSER: Starting Chrome")
+    log_activity("BROWSER: Starting Chrome", "starting_browser")
 
     browser = Driver(
         browser="chrome",
@@ -100,7 +105,9 @@ def create_browser():
     browser.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
     browser.set_script_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
 
-    log_activity("BROWSER: Chrome started successfully")
+    update_state(browser_ready=True)
+    log_activity("BROWSER: Chrome started successfully", "ready")
+
     return browser
 
 
@@ -109,26 +116,28 @@ def close_browser(browser):
         return
 
     try:
-        log_activity("BROWSER: Closing Chrome")
+        log_activity("BROWSER: Closing Chrome", "closing_browser")
         browser.quit()
-        log_activity("BROWSER: Chrome closed successfully")
+        log_activity("BROWSER: Chrome closed", "browser_closed")
     except Exception:
         log.exception("BROWSER: Error while closing Chrome")
 
 
 # =========================================================
-# TEST CYCLE
+# ONE TEST CYCLE
 # =========================================================
 
 def run_test_cycle(browser, cycle_number):
     log_activity(
-        f"CYCLE {cycle_number}: Starting navigation to {TEST_URL}"
+        f"CYCLE {cycle_number}: Beginning navigation to {TEST_URL}",
+        "navigating",
     )
 
     browser.get(TEST_URL)
 
     log_activity(
-        f"CYCLE {cycle_number}: Navigation completed"
+        f"CYCLE {cycle_number}: Navigation completed",
+        "reading_page",
     )
 
     title = browser.title
@@ -150,7 +159,8 @@ def run_test_cycle(browser, cycle_number):
 
     log_activity(
         f"CYCLE {cycle_number} PASSED | "
-        f"title={title!r} | url={url}"
+        f"title={title!r} | url={url}",
+        "cycle_passed",
     )
 
 
@@ -167,11 +177,14 @@ def heartbeat_monitor():
         log.info(
             "WATCHDOG: Process alive | "
             "worker_running=%s | browser_ready=%s | "
-            "last_completed_cycle=%s | browser_restarts=%s | "
+            "last_completed_cycle=%s | phase=%s | "
+            "last_activity=%s | browser_restarts=%s | "
             "last_error=%s",
             current["running"],
             current["browser_ready"],
             current["cycle"],
+            current["worker_phase"],
+            current["last_activity"],
             current["browser_restarts"],
             current["last_error"],
         )
@@ -189,27 +202,27 @@ def worker():
         running=True,
         browser_ready=False,
         last_error=None,
+        worker_phase="starting",
     )
 
-    log_activity("WORKER: Background worker started")
+    log_activity("WORKER: Background worker started", "starting")
 
     try:
         while not stop_event.is_set():
             try:
                 if browser is None:
                     browser = create_browser()
-                    update_state(browser_ready=True)
 
-                next_cycle = cycles_since_restart + 1
-
-                run_test_cycle(browser, next_cycle)
+                cycle_number = cycles_since_restart + 1
+                run_test_cycle(browser, cycle_number)
                 cycles_since_restart += 1
 
-                # Restart Chrome periodically to test recovery.
+                # Periodically test whether Chrome can restart cleanly.
                 if cycles_since_restart >= RESTART_AFTER_CYCLES:
                     log_activity(
-                        "BROWSER: Restarting after "
-                        f"{cycles_since_restart} successful cycles"
+                        f"BROWSER: Restarting after "
+                        f"{cycles_since_restart} successful cycles",
+                        "restarting_browser",
                     )
 
                     update_state(browser_ready=False)
@@ -224,15 +237,16 @@ def worker():
 
                     with state_lock:
                         state["browser_restarts"] += 1
-                        state["browser_ready"] = True
 
                     log_activity(
-                        "BROWSER: Restart completed successfully"
+                        "BROWSER: Restart completed",
+                        "ready",
                     )
 
                 log_activity(
                     f"WAIT: Beginning "
-                    f"{CYCLE_INTERVAL_SECONDS}-second delay"
+                    f"{CYCLE_INTERVAL_SECONDS}-second delay",
+                    "waiting",
                 )
 
                 interrupted = stop_event.wait(
@@ -241,26 +255,26 @@ def worker():
 
                 if interrupted:
                     log_activity(
-                        "WAIT: Interrupted by shutdown"
+                        "WAIT: Interrupted by shutdown",
+                        "stopping",
                     )
                     break
 
                 log_activity(
-                    "WAIT: Delay finished; starting next cycle"
+                    "WAIT: Delay finished; starting next cycle",
+                    "starting_next_cycle",
                 )
 
             except Exception as exc:
                 error_text = f"{type(exc).__name__}: {exc}"
 
-                log.error(
-                    "WORKER: Cycle failed: %s",
-                    error_text,
-                )
+                log.error("WORKER: Cycle failed: %s", error_text)
                 log.debug("%s", traceback.format_exc())
 
                 update_state(
                     browser_ready=False,
                     last_error=error_text,
+                    worker_phase="error_recovery",
                 )
 
                 close_browser(browser)
@@ -271,13 +285,19 @@ def worker():
                     break
 
     finally:
-        update_state(browser_ready=False)
+        update_state(
+            browser_ready=False,
+            worker_phase="stopping",
+        )
 
         close_browser(browser)
 
-        update_state(running=False)
+        update_state(
+            running=False,
+            worker_phase="stopped",
+        )
 
-        log_activity("WORKER: Background worker stopped")
+        log_activity("WORKER: Background worker stopped", "stopped")
 
 
 # =========================================================
@@ -287,13 +307,12 @@ def worker():
 @app.route("/")
 def health():
     current = get_state()
-
-    status_code = 200 if current["running"] else 503
+    code = 200 if current["running"] else 503
 
     return jsonify({
         "service": "Render Browser Test",
         **current,
-    }), status_code
+    }), code
 
 
 @app.route("/health")
@@ -313,7 +332,7 @@ def health_check():
 
 
 # =========================================================
-# APPLICATION ENTRY POINT
+# ENTRY POINT
 # =========================================================
 
 if __name__ == "__main__":
@@ -337,10 +356,7 @@ if __name__ == "__main__":
     worker_thread.start()
     heartbeat_thread.start()
 
-    log.info(
-        "Starting Flask health server on port %s",
-        FLASK_PORT,
-    )
+    log.info("Starting Flask health server on port %s", FLASK_PORT)
 
     try:
         app.run(
@@ -349,7 +365,6 @@ if __name__ == "__main__":
             use_reloader=False,
             threaded=True,
         )
-
     finally:
         log.info("APPLICATION: Shutdown started")
         stop_event.set()
