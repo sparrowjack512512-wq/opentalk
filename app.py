@@ -5,7 +5,7 @@ import threading
 import logging
 import traceback
 from flask import Flask
-from seleniumbase import SB
+from seleniumbase import Driver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -82,9 +82,10 @@ log = logging.getLogger("opentalk")
 
 running = False
 stop_flag = False
+driver = None
 
 # ============================================================
-# HELPERS
+# HELPERS (unchanged)
 # ============================================================
 def human_type(element, text):
     for char in text:
@@ -235,72 +236,73 @@ def run_cycle(d, messages):
     time.sleep(post_wait)
     skip_chat(d)
 
+# ============================================================
+# BOT LOOP (uses Driver, not SB)
+# ============================================================
 def bot_loop():
-    global running, stop_flag
+    global running, stop_flag, driver
     running = True
     try:
-        # Build SB kwargs; on server, xvfb + explicit Chrome path
-        sb_kwargs = {"uc": True, "binary_location": "/usr/bin/google-chrome"}
+        log.info("Creating Driver...")
+        driver_kwargs = {"uc": True}
         if IS_SERVER:
-            sb_kwargs["xvfb"] = True
-            log.info("Server mode: using Xvfb virtual display + /usr/bin/google-chrome")
+            driver_kwargs["xvfb"] = True
+            driver_kwargs["binary_location"] = "/usr/bin/google-chrome"
+            log.info("Server mode: xvfb=True, binary=/usr/bin/google-chrome")
         else:
-            sb_kwargs["window_size"] = "1920,1080"
-            # On Windows, don't set binary_location
-            sb_kwargs.pop("binary_location", None)
-            log.info("Local mode: visible browser window.")
+            driver_kwargs["headless"] = False
+            log.info("Local mode: headless=False")
 
-        if PROXY_URL:
-            log.info(f"Proxy configured (host: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else 'yes'})")
-        else:
-            log.info("No PROXY_URL set. Running without proxy.")
+        try:
+            driver = Driver(**driver_kwargs)
+            log.info("✅ Driver created successfully.")
+        except Exception as e:
+            log.critical(f"❌ Driver creation failed: {e}")
+            log.critical(traceback.format_exc())
+            return
 
-        log.info("🚀 Entering SB context manager...")
-        with SB(**sb_kwargs) as sb:
-            d = sb.driver
-            log.info("✅ SB driver created.")
-            handle_entry(d)
+        handle_entry(driver)
 
-            for cycle in range(1, MAX_CYCLES + 1):
-                if stop_flag:
-                    break
-                log.info(f"\n{'='*20} CYCLE {cycle} {'='*20}")
-                try:
-                    d.current_url
-                except InvalidSessionIdException:
-                    log.error("❌ Session died. Restarting...")
-                    break
+        for cycle in range(1, MAX_CYCLES + 1):
+            if stop_flag:
+                break
+            log.info(f"\n{'='*20} CYCLE {cycle} {'='*20}")
+            try:
+                driver.current_url
+            except InvalidSessionIdException:
+                log.error("❌ Session died. Restarting...")
+                break
 
-                if not is_matched(d):
-                    log.info("🔄 Clicking 'Start chatting'...")
-                    if not try_click(d, SEL_START, "Start chatting", timeout=3):
-                        js_click(d, SEL_START, "Start chatting", timeout=3)
+            if not is_matched(driver):
+                log.info("🔄 Clicking 'Start chatting'...")
+                if not try_click(driver, SEL_START, "Start chatting", timeout=3):
+                    js_click(driver, SEL_START, "Start chatting", timeout=3)
 
-                try:
-                    run_cycle(d, random.choice(MESSAGE_SETS))
-                except TimeoutException:
-                    log.warning("⏰ Match timeout. Reloading...")
-                    d.refresh()
-                    time.sleep(3)
-                    if not wait_for_captcha_to_pass(d, timeout=5):
-                        log.warning("⚠️ CAPTCHA reappeared. Attempting solve...")
-                        try:
-                            d.uc_gui_click_captcha()
-                        except:
-                            pass
-                        if not wait_for_captcha_to_pass(d, timeout=CAPTCHA_WAIT_TIMEOUT):
-                            log.error("❌ Could not re-solve. Restarting.")
-                            break
-                except InvalidSessionIdException:
-                    log.error("❌ Session lost. Restarting...")
-                    break
-                except Exception as e:
-                    log.error(f"❌ Cycle error: {e}")
-                    time.sleep(2)
+            try:
+                run_cycle(driver, random.choice(MESSAGE_SETS))
+            except TimeoutException:
+                log.warning("⏰ Match timeout. Reloading...")
+                driver.refresh()
+                time.sleep(3)
+                if not wait_for_captcha_to_pass(driver, timeout=5):
+                    log.warning("⚠️ CAPTCHA reappeared. Attempting solve...")
+                    try:
+                        driver.uc_gui_click_captcha()
+                    except:
+                        pass
+                    if not wait_for_captcha_to_pass(driver, timeout=CAPTCHA_WAIT_TIMEOUT):
+                        log.error("❌ Could not re-solve. Restarting.")
+                        break
+            except InvalidSessionIdException:
+                log.error("❌ Session lost. Restarting...")
+                break
+            except Exception as e:
+                log.error(f"❌ Cycle error: {e}")
+                time.sleep(2)
 
-                pause = random.uniform(CYCLE_PAUSE_MIN, CYCLE_PAUSE_MAX)
-                log.info(f"💤 Cycle pause: {pause:.1f}s")
-                time.sleep(pause)
+            pause = random.uniform(CYCLE_PAUSE_MIN, CYCLE_PAUSE_MAX)
+            log.info(f"💤 Cycle pause: {pause:.1f}s")
+            time.sleep(pause)
 
     except KeyboardInterrupt:
         log.info("🛑 Interrupted.")
@@ -308,6 +310,11 @@ def bot_loop():
         log.critical(f"💥 Fatal in bot_loop: {e}")
         log.critical(traceback.format_exc())
     finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
         running = False
         log.info("🏁 Bot finished.")
 
@@ -321,16 +328,9 @@ def health():
     return f"opentalk bot: running={running}", 200
 
 # ============================================================
-# ENTRY POINT with safe wrapper
+# ENTRY POINT
 # ============================================================
 if __name__ == "__main__":
-    def run_bot_safe():
-        try:
-            bot_loop()
-        except Exception:
-            log.critical("Bot loop crashed with traceback:")
-            log.critical(traceback.format_exc())
-
-    threading.Thread(target=run_bot_safe, daemon=True).start()
+    threading.Thread(target=bot_loop, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
