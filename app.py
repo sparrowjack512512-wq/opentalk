@@ -34,18 +34,23 @@ MSG_GAP = 3.5
 POST_SEND_WAIT_MIN = 20.0
 POST_SEND_WAIT_MAX = 25.0
 
-# ============================================================
-# LOGGING
-# ============================================================
+# Script to force closed shadow roots to open
+# This MUST run before the page's own scripts create the Turnstile widget
+SHADOW_ROOT_SCRIPT = """
+const originalAttachShadow = Element.prototype.attachShadow;
+Element.prototype.attachShadow = function(...args) {
+    if (args[0] && args[0].mode === 'closed') {
+        args[0].mode = 'open';
+    }
+    return originalAttachShadow.apply(this, args);
+};
+console.log('ShadowRoot mode forced to open.');
+"""
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("opentalk")
-
 running = False
-stop_flag = False
 
-# ============================================================
-# DRIVER
-# ============================================================
 def create_driver():
     options = webdriver.ChromeOptions()
     options.add_argument("--headless=new")
@@ -55,13 +60,17 @@ def create_driver():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    # Important: Use the system Chrome binary
     options.binary_location = "/usr/bin/google-chrome"
-    return webdriver.Chrome(options=options)
+    driver = webdriver.Chrome(options=options)
+    
+    # CRITICAL: Inject the shadow-root opener BEFORE any page loads
+    # This makes the Turnstile sitekey readable by selenium-turnstile
+    driver.execute_cdp_cmd(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": SHADOW_ROOT_SCRIPT}
+    )
+    return driver
 
-# ============================================================
-# HELPERS
-# ============================================================
 def human_type(element, text):
     for char in text:
         element.send_keys(char)
@@ -130,9 +139,6 @@ def send_message(d, input_box, text):
     if not try_click(d, SEL_SEND, "send", timeout=3):
         input_box.send_keys(Keys.ENTER)
 
-# ============================================================
-# BOT LOGIC
-# ============================================================
 def run_cycle(d, messages):
     log.info(f"Waiting {POST_START_WAIT}s...")
     time.sleep(POST_START_WAIT)
@@ -157,7 +163,7 @@ def run_cycle(d, messages):
     skip_chat(d)
 
 def bot_loop():
-    global running, stop_flag
+    global running
     running = True
     driver = None
     try:
@@ -169,12 +175,13 @@ def bot_loop():
         # ---- Solve CAPTCHA via Peak ----
         try:
             log.info("Solving Turnstile via Peak...")
-            # Reads sitekey from page, asks Peak for token, injects it.
             token = solve_turnstile(driver)
             log.info(f"Token injected (length={len(token)}).")
             time.sleep(2)
         except Exception as e:
             log.warning(f"Peak solve failed: {e}")
+            # If solve fails, we can still try to click buttons manually
+            # but the CAPTCHA will block us. Log and continue.
 
         # ---- Entry ----
         log.info("Clicking entry buttons...")
@@ -188,8 +195,6 @@ def bot_loop():
 
         # ---- Main Loop ----
         for cycle in range(1, 999999):
-            if stop_flag:
-                break
             log.info(f"\n{'='*20} CYCLE {cycle} {'='*20}")
 
             if not is_matched(driver):
@@ -236,10 +241,6 @@ app = Flask(__name__)
 def health():
     return f"opentalk bot: running={running}", 200
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
 if __name__ == "__main__":
     threading.Thread(target=bot_loop, daemon=True).start()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
