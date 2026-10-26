@@ -12,9 +12,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException, InvalidSessionIdException
 
-# ============================================================
-# CONFIG
-# ============================================================
 URL = "https://opentalk.club/text/"
 
 SEL_GIRL  = "button.ot-onb-action:not(.is-primary)"
@@ -22,70 +19,35 @@ SEL_START = "button.ot-onb-action.is-primary"
 SEL_INPUT = "#chatInput"
 SEL_SEND  = "#chatSend"
 SEL_SKIP  = "#startBtn"
-SEL_LEAVE = "#stopBtn"
 
 MESSAGE_SETS = [
-    ["Hii", "F 20", "talk to me on Chitmet gg", "Lisaaa9848"],
-    ["hey", "F 20", "chat with me on Chitmet gg", "Lisaaa9848"],
-    ["heyyy", "F 20", "find me on Chitmet gg", "Lisaaa9848"],
-    ["hiii there", "F 20", "let's chat on Chitmet gg", "Lisaaa9848"],
-    ["hellooo", "F 20", "message me on Chitmet gg", "Lisaaa9848"],
-    ["hey you", "F 20", "come talk on Chitmet gg", "Lisaaa9848"],
-    ["hiiiii", "F 20", "join me on Chitmet gg", "Lisaaa9848"],
-    ["heyy", "F 20", "wanna chat on Chitmet gg?", "Lisaaa9848"],
-    ["hello", "F 20", "let's connect on Chitmet gg", "Lisaaa9848"],
-    ["hii dear", "F 20", "I'm on Chitmet gg", "Lisaaa9848"],
-    ["heyyyy", "F 20", "come say hi on Chitmet gg", "Lisaaa9848"],
-    ["hiii :) ", "F 20", "talk with me on Chitmet gg", "Lisaaa9848"],
-    ["hey there", "F 20", "find me over on Chitmet gg", "Lisaaa9848"],
-    ["helloooo", "F 20", "let's talk on Chitmet gg", "Lisaaa9848"],
-    ["hii", "F 20", "send me a message on Chitmet gg", "Lisaaa9848"],
-    ["heyyy :) ", "F 20", "let's have a chat on Chitmet gg", "Lisaaa9848"],
-    ["hiiii", "F 20", "you can reach me on Chitmet gg", "Lisaaa9848"],
-    ["hey what's up", "F 20", "chat with me over on Chitmet gg", "Lisaaa9848"],
-    ["hii cutie", "F 20", "come chat with me on Chitmet gg", "Lisaaa9848"],
-    ["heyy", "F 20", "say hello on Chitmet gg", "Lisaaa9848"]
+    ["Hii", "F", "talk to me on Chitmet gg", "Lisaaa9848"],
+    ["hey", "F", "chat with me on Chitmet gg", "Lisaaa9848"],
 ]
 
-MATCH_TIMEOUT      = 90
-MAX_CYCLES         = 9999999999999999999
-POST_START_WAIT    = 3.0
-TYPE_DELAY_MIN     = 0.02
-TYPE_DELAY_MAX     = 0.08
-ENTER_DELAY_MIN    = 0.3
-ENTER_DELAY_MAX    = 0.8
-MSG_GAP            = 3.5
+MATCH_TIMEOUT = 90
+MAX_CYCLES = 999999
+POST_START_WAIT = 3.0
+TYPE_DELAY_MIN = 0.02
+TYPE_DELAY_MAX = 0.08
+ENTER_DELAY_MIN = 0.3
+ENTER_DELAY_MAX = 0.8
+MSG_GAP = 3.5
 POST_SEND_WAIT_MIN = 20.0
 POST_SEND_WAIT_MAX = 25.0
-POST_LAST_MSG_SETTLE_MIN = 1.0
-POST_LAST_MSG_SETTLE_MAX = 2.0
-SKIP_CLICK_GAP     = 0.6
-CYCLE_PAUSE_MIN    = 3.0
-CYCLE_PAUSE_MAX    = 9.0
-
+SKIP_CLICK_GAP = 0.6
+CYCLE_PAUSE_MIN = 3.0
+CYCLE_PAUSE_MAX = 9.0
 CAPTCHA_WAIT_TIMEOUT = 40.0
-RECONNECT_TIME = 5
 
-PROXY_URL = os.environ.get("PROXY_URL", "")
 IS_SERVER = os.name != "nt"
 
-# ============================================================
-# LOGGING
-# ============================================================
-LOG_FILE = "opentalk_bot.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()]
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("opentalk")
 
 running = False
 stop_flag = False
 
-# ============================================================
-# HELPERS
-# ============================================================
 def human_type(element, text):
     for char in text:
         element.send_keys(char)
@@ -95,28 +57,26 @@ def wait_for(d, selector, timeout, condition="presence"):
     w = WebDriverWait(d, timeout)
     if condition == "clickable":
         return w.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
-    if condition == "visible":
-        return w.until(EC.visibility_of_element_located((By.CSS_SELECTOR, selector)))
     return w.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
 
 def try_click(d, selector, label, timeout=2):
     try:
         el = wait_for(d, selector, timeout=timeout, condition="clickable")
         el.click()
-        log.info(f"✅ Clicked: {label}")
+        log.info(f"Clicked: {label}")
         return True
     except Exception as e:
-        log.warning(f"⚠️ Could not click '{label}': {type(e).__name__}")
+        log.warning(f"Could not click '{label}': {type(e).__name__}")
         return False
 
 def js_click(d, selector, label, timeout=5):
     try:
         el = WebDriverWait(d, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
         d.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", el)
-        log.info(f"✅ Clicked (JS): {label}")
+        log.info(f"Clicked (JS): {label}")
         return True
     except Exception as e:
-        log.warning(f"⚠️ Could not JS-click '{label}': {type(e).__name__}")
+        log.warning(f"Could not JS-click '{label}': {type(e).__name__}")
         return False
 
 def is_matched(d):
@@ -127,71 +87,68 @@ def is_matched(d):
         return False
 
 def wait_for_captcha_to_pass(d, timeout=CAPTCHA_WAIT_TIMEOUT):
-    log.info(f"⏳ Waiting up to {timeout}s for CAPTCHA to be solved...")
+    log.info(f"Waiting up to {timeout}s for CAPTCHA...")
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             d.find_element(By.CSS_SELECTOR, SEL_GIRL)
-            log.info("✅ CAPTCHA passed! 'I'm a girl' button is present.")
+            log.info("CAPTCHA passed! 'I'm a girl' present.")
             return True
         except NoSuchElementException:
             pass
         if is_matched(d):
-            log.info("✅ CAPTCHA passed! Chat input is visible.")
+            log.info("CAPTCHA passed! Chat input visible.")
             return True
         time.sleep(0.5)
-    log.error(f"❌ CAPTCHA not solved within {timeout}s.")
+    log.error(f"CAPTCHA not solved within {timeout}s.")
     return False
 
 def handle_entry(d):
-    log.info("=" * 60)
-    log.info(f"🚀 Opening page (Server mode: {IS_SERVER})...")
-    log.info("=" * 60)
+    log.info("Opening page...")
     try:
-        d.uc_open_with_reconnect(URL, reconnect_time=RECONNECT_TIME)
+        d.uc_open_with_reconnect(URL, reconnect_time=5)
     except Exception as e:
-        log.error(f"❌ Failed to open URL: {e}")
+        log.error(f"Failed to open URL: {e}")
         raise
     time.sleep(2)
 
     if not wait_for_captcha_to_pass(d, timeout=5):
-        log.info("🔄 Attempting automatic CAPTCHA click via SeleniumBase...")
+        log.info("Attempting CAPTCHA solve via CDP...")
         try:
-            d.uc_gui_click_captcha()
+            # solve_captcha uses CDP, not PyAutoGUI
+            d.solve_captcha()
         except Exception as e:
-            log.warning(f"⚠️ Automatic CAPTCHA click failed: {e}")
+            log.warning(f"solve_captcha failed: {e}")
         if not wait_for_captcha_to_pass(d, timeout=CAPTCHA_WAIT_TIMEOUT):
-            log.error("❌ Could not bypass CAPTCHA automatically.")
+            log.error("Could not bypass CAPTCHA.")
             raise TimeoutException("CAPTCHA not solved")
 
-    log.info("🖱️ Clicking entry buttons...")
+    log.info("Clicking entry buttons...")
     if not try_click(d, SEL_GIRL, "'I'm a girl'"):
         js_click(d, SEL_GIRL, "'I'm a girl'")
     time.sleep(1)
     if not try_click(d, SEL_START, "Start chatting"):
         js_click(d, SEL_START, "Start chatting")
     time.sleep(2)
-    log.info("✅ Entry flow completed.")
+    log.info("Entry flow completed.")
 
 def skip_chat(d):
     try:
-        log.info("⏭️ Skipping chat (#startBtn)...")
+        log.info("Skipping chat...")
         btn = wait_for(d, SEL_SKIP, timeout=10, condition="clickable")
-        log.info(f"   Before click 1: text='{btn.text}'")
         btn.click()
-        log.info("✅ Skip click 1")
+        log.info("Skip click 1")
         time.sleep(SKIP_CLICK_GAP)
         try:
             btn2 = wait_for(d, SEL_SKIP, timeout=5, condition="clickable")
-            log.info(f"   Before click 2: text='{btn2.text}'")
             btn2.click()
-            log.info("✅ Skip click 2 (confirmed)")
+            log.info("Skip click 2 (confirmed)")
             time.sleep(1.0)
-        except Exception as e:
-            log.warning(f"⚠️ Second skip click: {e}")
-        log.info("✅ Left chat.")
+        except Exception:
+            pass
+        log.info("Left chat.")
     except Exception as e:
-        log.error(f"❌ Skip failed: {type(e).__name__}: {e}")
+        log.error(f"Skip failed: {type(e).__name__}: {e}")
 
 def send_message(d, input_box, text):
     deadline = time.time() + 10
@@ -199,9 +156,6 @@ def send_message(d, input_box, text):
         if input_box.is_displayed() and input_box.is_enabled():
             break
         time.sleep(0.2)
-    else:
-        log.error("❌ Input box not ready.")
-        return
     input_box.clear()
     human_type(input_box, text)
     time.sleep(random.uniform(ENTER_DELAY_MIN, ENTER_DELAY_MAX))
@@ -209,10 +163,10 @@ def send_message(d, input_box, text):
         input_box.send_keys(Keys.ENTER)
 
 def run_cycle(d, messages):
-    log.info(f"⏳ Waiting {POST_START_WAIT}s...")
+    log.info(f"Waiting {POST_START_WAIT}s...")
     time.sleep(POST_START_WAIT)
     if not is_matched(d):
-        log.info(f"🔍 Polling for match (up to {MATCH_TIMEOUT}s)...")
+        log.info(f"Polling for match (up to {MATCH_TIMEOUT}s)...")
         deadline = time.time() + MATCH_TIMEOUT
         while time.time() < deadline:
             if is_matched(d):
@@ -220,95 +174,84 @@ def run_cycle(d, messages):
             time.sleep(0.4)
         else:
             raise TimeoutException("Match timeout")
-    log.info("🎉 Matched!")
+    log.info("Matched!")
     input_box = d.find_element(By.CSS_SELECTOR, SEL_INPUT)
-    log.info(f"💬 Sending: {messages}")
+    log.info(f"Sending: {messages}")
     for i, msg in enumerate(messages):
         send_message(d, input_box, msg)
-        log.info(f"✅ Sent {i+1}: {msg}")
+        log.info(f"Sent {i+1}: {msg}")
         if i < len(messages) - 1:
             time.sleep(MSG_GAP)
-    settle = random.uniform(POST_LAST_MSG_SETTLE_MIN, POST_LAST_MSG_SETTLE_MAX)
-    time.sleep(settle)
-    post_wait = random.uniform(POST_SEND_WAIT_MIN, POST_SEND_WAIT_MAX)
-    log.info(f"⏳ Waiting {post_wait:.2f}s before skip...")
-    time.sleep(post_wait)
+    time.sleep(random.uniform(POST_SEND_WAIT_MIN, POST_SEND_WAIT_MAX))
     skip_chat(d)
 
-# ============================================================
-# BOT LOOP
-# ============================================================
 def bot_loop():
     global running, stop_flag
     running = True
     try:
         sb_kwargs = {"uc": True}
         if IS_SERVER:
-            sb_kwargs.update({
-                "xvfb": True,
-                "binary_location": "/usr/bin/google-chrome",
-            })
-            log.info("Server mode: SB(uc=True, xvfb=True, binary=/usr/bin/google-chrome)")
+            sb_kwargs["xvfb"] = True
+            sb_kwargs["binary_location"] = "/usr/bin/google-chrome"
+            log.info("Server mode: SB(uc=True, xvfb=True)")
         else:
             sb_kwargs["headless"] = False
             log.info("Local mode: SB(uc=True)")
 
-        log.info("🚀 About to enter SB context manager...")
+        log.info("Entering SB context...")
         sb = SB(**sb_kwargs)
         try:
             sb.__enter__()
-            log.info("✅ SB entered successfully.")
+            log.info("SB entered.")
         except Exception as e:
-            log.critical(f"❌ SB __enter__ failed: {e}")
+            log.critical(f"SB __enter__ failed: {e}")
             log.critical(traceback.format_exc())
             return
 
         try:
             d = sb.driver
-            log.info("✅ SB driver created successfully.")
+            log.info("Driver created.")
             handle_entry(d)
 
             for cycle in range(1, MAX_CYCLES + 1):
                 if stop_flag:
                     break
-                log.info(f"\n{'='*20} CYCLE {cycle} {'='*20}")
+                log.info(f"CYCLE {cycle}")
 
                 try:
                     d.current_url
                 except InvalidSessionIdException:
-                    log.error("❌ Session died. Restarting...")
+                    log.error("Session died.")
                     break
 
                 if not is_matched(d):
-                    log.info("🔄 Clicking 'Start chatting'...")
+                    log.info("Clicking 'Start chatting'...")
                     if not try_click(d, SEL_START, "Start chatting", timeout=3):
                         js_click(d, SEL_START, "Start chatting", timeout=3)
 
                 try:
                     run_cycle(d, random.choice(MESSAGE_SETS))
                 except TimeoutException:
-                    log.warning("⏰ Match timeout. Reloading...")
+                    log.warning("Match timeout. Reloading...")
                     d.refresh()
                     time.sleep(3)
                     if not wait_for_captcha_to_pass(d, timeout=5):
-                        log.warning("⚠️ CAPTCHA reappeared. Attempting solve...")
+                        log.warning("CAPTCHA reappeared. Trying solve_captcha...")
                         try:
-                            d.uc_gui_click_captcha()
+                            d.solve_captcha()
                         except Exception as e:
-                            log.warning(f"⚠️ CAPTCHA click failed: {e}")
+                            log.warning(f"solve_captcha failed: {e}")
                         if not wait_for_captcha_to_pass(d, timeout=CAPTCHA_WAIT_TIMEOUT):
-                            log.error("❌ Could not re-solve. Restarting.")
+                            log.error("Could not re-solve. Restarting.")
                             break
                 except InvalidSessionIdException:
-                    log.error("❌ Session lost. Restarting...")
+                    log.error("Session lost.")
                     break
                 except Exception as e:
-                    log.error(f"❌ Cycle error: {e}")
+                    log.error(f"Cycle error: {e}")
                     time.sleep(2)
 
-                pause = random.uniform(CYCLE_PAUSE_MIN, CYCLE_PAUSE_MAX)
-                log.info(f"💤 Cycle pause: {pause:.1f}s")
-                time.sleep(pause)
+                time.sleep(random.uniform(CYCLE_PAUSE_MIN, CYCLE_PAUSE_MAX))
 
         finally:
             try:
@@ -317,17 +260,14 @@ def bot_loop():
                 pass
 
     except KeyboardInterrupt:
-        log.info("🛑 Interrupted.")
+        log.info("Interrupted.")
     except Exception as e:
-        log.critical(f"💥 Fatal in bot_loop: {e}")
+        log.critical(f"Fatal: {e}")
         log.critical(traceback.format_exc())
     finally:
         running = False
-        log.info("🏁 Bot finished.")
+        log.info("Bot finished.")
 
-# ============================================================
-# FLASK
-# ============================================================
 app = Flask(__name__)
 
 @app.route("/")
@@ -336,5 +276,4 @@ def health():
 
 if __name__ == "__main__":
     threading.Thread(target=bot_loop, daemon=True).start()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
