@@ -34,17 +34,30 @@ MSG_GAP = 3.5
 POST_SEND_WAIT_MIN = 20.0
 POST_SEND_WAIT_MAX = 25.0
 
-# This script MUST run before any page JS creates the shadow root.
-# It forces closed shadow roots to be open so the sitekey becomes readable.
-SHADOW_ROOT_SCRIPT = """
-const originalAttachShadow = Element.prototype.attachShadow;
-Element.prototype.attachShadow = function(...args) {
-    if (args[0] && args[0].mode === 'closed') {
-        args[0].mode = 'open';
+# ============================================================
+# TURNSTILE HOOK (captures sitekey before page JS runs)
+# ============================================================
+TURNSTILE_HOOK = """
+window.__capturedSitekey = null;
+window.__tsOriginal = window.turnstile;
+Object.defineProperty(window, 'turnstile', {
+    configurable: true,
+    get() { return window.__tsOriginal; },
+    set(v) {
+        window.__tsOriginal = v;
+        if (v && v.render && !v.__hooked) {
+            const orig = v.render.bind(v);
+            v.render = function(el, opts) {
+                if (opts && opts.sitekey) {
+                    window.__capturedSitekey = opts.sitekey;
+                    console.log('CAPTURED_SITEKEY:' + opts.sitekey);
+                }
+                return orig(el, opts);
+            };
+            v.__hooked = true;
+        }
     }
-    return originalAttachShadow.apply(this, args);
-};
-console.log('ShadowRoot mode forced to open.');
+});
 """
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -63,10 +76,10 @@ def create_driver():
     options.binary_location = "/usr/bin/google-chrome"
     driver = webdriver.Chrome(options=options)
     
-    # CRITICAL: inject BEFORE any page loads
+    # CRITICAL: inject hook BEFORE any page loads
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
-        {"source": SHADOW_ROOT_SCRIPT}
+        {"source": TURNSTILE_HOOK}
     )
     return driver
 
@@ -171,10 +184,16 @@ def bot_loop():
         driver.get(URL)
         time.sleep(5)
 
-        # ---- Solve CAPTCHA via Peak ----
+        # ---- Solve CAPTCHA using captured sitekey ----
+        captured = driver.execute_script("return window.__capturedSitekey;")
         try:
             log.info("Solving Turnstile via Peak...")
-            token = solve_turnstile(driver)
+            if captured:
+                log.info(f"Using captured sitekey: {captured[:15]}...")
+                token = solve_turnstile(driver, sitekey=captured)
+            else:
+                log.info("No captured sitekey, trying auto-detection...")
+                token = solve_turnstile(driver)
             log.info(f"Token injected (length={len(token)}).")
             time.sleep(2)
         except Exception as e:
@@ -205,8 +224,9 @@ def bot_loop():
                 log.warning("Match timeout. Reloading...")
                 driver.refresh()
                 time.sleep(3)
+                captured = driver.execute_script("return window.__capturedSitekey;")
                 try:
-                    solve_turnstile(driver)
+                    solve_turnstile(driver, sitekey=captured) if captured else solve_turnstile(driver)
                     log.info("Re-solved CAPTCHA after reload.")
                 except Exception as e:
                     log.warning(f"Re-solve failed: {e}")
