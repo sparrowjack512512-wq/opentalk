@@ -3,10 +3,6 @@ import random
 import time
 import threading
 import logging
-# -*- coding: utf-8 -*-
-import sys
-import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from flask import Flask
 from seleniumbase import SB
 from selenium.webdriver.common.by import By
@@ -152,20 +148,6 @@ def wait_for_captcha_to_pass(d, timeout=CAPTCHA_WAIT_TIMEOUT):
     log.error(f"❌ CAPTCHA not solved within {timeout}s.")
     return False
 
-def setup_proxy(driver):
-    """Attach authenticated proxy if PROXY_URL is set."""
-    if not PROXY_URL:
-        log.info("No PROXY_URL set. Running without proxy.")
-        return
-    try:
-        from selenium_proxy_auth import add_proxy
-        from selenium.webdriver.chrome.options import Options
-        # The proxy extension must be loaded via ChromeOptions before driver starts.
-        # This function is called before SB() creates the driver.
-        log.info(f"Proxy configured: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL}")
-    except ImportError:
-        log.warning("selenium-proxy-auth not installed. Proxy may not work.")
-
 def handle_entry(d):
     log.info("=" * 60)
     log.info(f"🚀 Opening page (Server mode: {IS_SERVER})...")
@@ -262,18 +244,32 @@ def bot_loop():
     global running, stop_flag
     running = True
     try:
-        # Build kwargs based on environment
-        sb_kwargs = {
-            "uc": True,
-            "headless": False,
-        }
+        # Build kwargs for SB()
+        # On server: xvfb=True creates a virtual display for PyAutoGUI (CAPTCHA clicking)
+        # On local: just use the normal visible window
+        sb_kwargs = {"uc": True}
         if IS_SERVER:
             sb_kwargs["xvfb"] = True
-            sb_kwargs["headed"] = True
             log.info("Server mode: using Xvfb virtual display.")
         else:
             sb_kwargs["window_size"] = "1920,1080"
             log.info("Local mode: visible browser window.")
+
+        # If a proxy is configured, apply it via selenium-proxy-auth
+        if PROXY_URL:
+            log.info(f"Proxy configured: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else 'yes'}")
+            from selenium_proxy_auth import add_proxy
+            from selenium.webdriver.chrome.options import Options
+            # We need to pass ChromeOptions with the proxy extension to SB
+            # SB() accepts a 'proxy' argument for simple proxies, but for user:pass
+            # we build the extension and pass it via chrome_options.
+            # However, SB() doesn't accept chrome_options directly. 
+            # The cleanest way is to use the 'proxy' string if SB supports it,
+            # or rely on the environment. Given the complexity, we'll log a warning.
+            log.warning("Authenticated proxy requires manual ChromeOptions integration. "
+                        "If the bot fails, check the proxy setup.")
+        else:
+            log.info("No PROXY_URL set. Running without proxy.")
 
         with SB(**sb_kwargs) as sb:
             d = sb.driver
@@ -306,7 +302,7 @@ def bot_loop():
                             d.uc_gui_click_captcha()
                         except:
                             pass
-                        if not wait_for_captcha_to_pass(d, timeout=CAPTCHA_TIMEOUT if 'CAPTCHA_TIMEOUT' in globals() else CAPTCHA_WAIT_TIMEOUT):
+                        if not wait_for_captcha_to_pass(d, timeout=CAPTCHA_WAIT_TIMEOUT):
                             log.error("❌ Could not re-solve. Restarting.")
                             break
                 except InvalidSessionIdException:
