@@ -4,7 +4,7 @@ FROM python:3.11-slim-bookworm
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 
-# Install Chrome and the system dependencies required by SeleniumBase.
+# Install system dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
@@ -41,11 +41,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxtst6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Add Google's Chrome repository.
+# Install Google's official signing key in binary keyring format.
 RUN mkdir -p /etc/apt/keyrings \
-    && wget -q -O /etc/apt/keyrings/google-chrome.gpg \
-       https://dl.google.com/linux/linux_signing_key.pub \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
+    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub \
+       | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
+    && chmod 644 /etc/apt/keyrings/google-chrome.gpg
+
+# Add Google's Chrome repository and install Chrome.
+RUN echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
        > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends google-chrome-stable \
@@ -58,9 +61,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 
-# Verify Chrome is available during the image build.
+# Verify the Chrome installation.
 RUN which google-chrome \
     && google-chrome --version
 
-# Start the updated Python app and stream logs immediately.
+# Start the diagnostic application.
 CMD ["sh", "-c", "echo 'CONTAINER STARTED'; xvfb-run -a -s '-screen 0 1920x1080x24' python -u app.py"]
